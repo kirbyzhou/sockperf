@@ -39,10 +39,10 @@ void print_addresses(const fds_data *data, int &list_count)
                 NI_NUMERICHOST | NI_NUMERICSERV);
         switch (data->server_addr.addr.sa_family) {
             case AF_UNIX:
-                printf("[%2d] ADDR = %s # %s\n", list_count++, data->server_addr.addr_un.sun_path, PRINT_PROTOCOL(data->sock_type));
+                printf("[%2d] ADDR = %s # %s\n", list_count++, data->server_addr.addr_un.sun_path, PRINT_PROTOCOL(data->sock_type, data->sock_proto));
                 break;
             default:
-                printf("[%2d] IP = %-15s PORT = %5s # %s\n", list_count++, hbuf, pbuf, PRINT_PROTOCOL(data->sock_type));
+                printf("[%2d] IP = %-15s PORT = %5s # %s\n", list_count++, hbuf, pbuf, PRINT_PROTOCOL(data->sock_type, data->sock_proto));
         }
     }
     for (int i = 0; i < data->memberships_size; i++) {
@@ -53,7 +53,7 @@ void print_addresses(const fds_data *data, int &list_count)
                 NI_NUMERICHOST | NI_NUMERICSERV);
         printf("[%2d] IP = %-15s PORT = %5s # %s\n", list_count++,
                 hbuf, pbuf,
-                PRINT_PROTOCOL(data->sock_type));
+                PRINT_PROTOCOL(data->sock_type, data->sock_proto));
     }
 }
 

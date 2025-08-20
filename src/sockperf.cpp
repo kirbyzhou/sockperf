@@ -177,6 +177,8 @@ static const AOPT_DESC common_opt_desc[] = {
       "Show the help message and exit." },
     { OPT_TCP,                AOPT_NOARG,                       aopt_set_literal(0),
       aopt_set_string("tcp", "stream"), "Use stream socket/TCP protocol (default dgram socket/UDP protocol)." },
+    { OPT_SCTP,               AOPT_NOARG,                       aopt_set_literal(0),
+      aopt_set_string("sctp", "sctp-stream"), "Use stream socket/SCTP protocol (default dgram socket/UDP protocol)." },
     { 'i', AOPT_ARG, aopt_set_literal('i'), aopt_set_string("addr", "ip"), "Listen on/send to address in IPv4, IPv6, UNIX domain socket format"},
     { 'p',                                                AOPT_ARG,
       aopt_set_literal('p'),                              aopt_set_string("port"),
@@ -227,6 +229,13 @@ static const AOPT_DESC common_opt_desc[] = {
       aopt_set_literal(0),
       aopt_set_string("tcp-skip-blocking-send"),
       "Enables non-blocking send operation (default OFF)." },
+#if defined(__linux__)
+    { OPT_SCTP_MAXRTO_MS,
+      AOPT_ARG,
+      aopt_set_literal(0),
+      aopt_set_string("sctp-maxrto"),
+      "Set SCTP max rto timeout to <msec>, default is given by kernel."},
+#endif
     { OPT_TOS, AOPT_ARG, aopt_set_literal(0), aopt_set_string("tos"), "Allows setting tos" },
     { OPT_RX_MC_IF, AOPT_ARG, aopt_set_literal(0), aopt_set_string("mc-rx-ip", "mc-rx-if"),
       "Use mc-rx-ip (IPv4) / mc-rx-if (IPv6). Set ipv4 address / interface index of interface on which to receive multicast messages (can be other then "
@@ -2198,8 +2207,35 @@ static int parse_common_opt(const AOPT_OBJECT *common_obj) {
             }
         }
 
+        if (!rc && aopt_check(common_obj, OPT_SCTP)) {
+            if (!aopt_check(common_obj, 'f')) {
+                s_user_params.sock_type = SOCK_STREAM;
+                s_user_params.sock_proto = IPPROTO_SCTP;
+            } else {
+                log_msg("--sctp conflicts with -f option");
+                rc = SOCKPERF_ERR_BAD_ARGUMENT;
+            }
+        }
+
         if (!rc && aopt_check(common_obj, OPT_TCP_NODELAY_OFF)) {
             s_user_params.tcp_nodelay = false;
+        }
+
+        if (!rc && aopt_check(common_obj, OPT_SCTP_MAXRTO_MS)) {
+            const char *optarg = aopt_value(common_obj, OPT_SCTP_MAXRTO_MS);
+            if (optarg) {
+                errno = 0;
+                long value = strtol(optarg, NULL, 0);
+                if (errno != 0 || value <= 0 || value > INT_MAX) {
+                    log_msg("'-%d' Invalid socket buffer size: %s", OPT_SCTP_MAXRTO_MS, optarg);
+                    rc = SOCKPERF_ERR_BAD_ARGUMENT;
+                } else {
+                    s_user_params.sctp_maxrto_ms = value;
+                }
+            } else {
+                log_msg("'-%d' Invalid value", OPT_SCTP_MAXRTO_MS);
+                rc = SOCKPERF_ERR_BAD_ARGUMENT;
+            }
         }
 
         if (!rc && aopt_check(common_obj, OPT_IP_MULTICAST_TTL)) {
@@ -2780,7 +2816,7 @@ int sock_set_snd_rcv_bufs(int fd) {
 
 int sock_set_tcp_nodelay(int fd) {
     int rc = SOCKPERF_ERR_NONE;
-    if (s_user_params.tcp_nodelay) {
+    if (s_user_params.tcp_nodelay && s_user_params.sock_proto == 0) {
         /* set Delivering Messages Immediately */
         int tcp_nodelay = 1;
         if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&tcp_nodelay, sizeof(tcp_nodelay)) <
@@ -2789,8 +2825,45 @@ int sock_set_tcp_nodelay(int fd) {
             rc = SOCKPERF_ERR_SOCKET;
         }
     }
+#if defined(__linux__)
+    if (s_user_params.tcp_nodelay && s_user_params.sock_proto == IPPROTO_SCTP) {
+        /* set Delivering Messages Immediately */
+        int sctp_nodelay = 1;
+        if (setsockopt(fd, IPPROTO_SCTP, SCTP_NODELAY, (char *)&sctp_nodelay, sizeof(sctp_nodelay)) <
+            0) {
+            log_err("setsockopt(TCP_NODELAY)");
+            rc = SOCKPERF_ERR_SOCKET;
+        }
+    }
+#endif
     return rc;
 }
+
+#if defined(__linux__)
+int sock_set_sctp_maxrto(int fd) {
+    int rc = SOCKPERF_ERR_NONE;
+    if (s_user_params.sctp_maxrto_ms && s_user_params.sock_proto == IPPROTO_SCTP) {
+        /* set Delivering Messages Immediately */
+        struct sctp_rtoinfo sctp_rtoinfo;
+        socklen_t scp_rtoinfo_len = sizeof(sctp_rtoinfo);
+        if (getsockopt(fd, IPPROTO_SCTP, SCTP_RTOINFO, (char *)&sctp_rtoinfo, &scp_rtoinfo_len) <
+            0) {
+            log_err("getsockopt(SCTP_RTOINFO)");
+            rc = SOCKPERF_ERR_SOCKET;
+        }
+        sctp_rtoinfo.srto_initial = std::min(sctp_rtoinfo.srto_initial, s_user_params.sctp_maxrto_ms);
+        sctp_rtoinfo.srto_min = std::min(sctp_rtoinfo.srto_min, s_user_params.sctp_maxrto_ms);
+        sctp_rtoinfo.srto_max = s_user_params.sctp_maxrto_ms;
+        if (setsockopt(fd, IPPROTO_SCTP, SCTP_RTOINFO, (char *)&sctp_rtoinfo, sizeof(sctp_rtoinfo)) <
+            0) {
+            log_err("setsockopt(SCTP_RTOINFO)");
+            rc = SOCKPERF_ERR_SOCKET;
+        }
+    }
+    return rc;
+}
+#endif
+
 
 int sock_set_tos(int fd) {
     int rc = SOCKPERF_ERR_NONE;
@@ -3080,6 +3153,12 @@ int prepare_socket(int fd, struct fds_data *p_data)
     if (!rc && (p_data->sock_type == SOCK_STREAM)) {
         rc = sock_set_tcp_nodelay(fd);
     }
+
+#if defined(__linux__)
+    if (!rc && (p_data->sock_proto == IPPROTO_SCTP)) {
+        rc = sock_set_sctp_maxrto(fd);
+    }
+#endif
 
     if (!rc && (s_user_params.tos)) {
         rc = sock_set_tos(fd);
@@ -3375,7 +3454,7 @@ static int set_sockets_from_feedfile(const char *feedfile_name) {
                 g_fds_array[curr_fd]->memberships_size++;
             } else {
                 /* create a socket */
-                if ((curr_fd = (int)socket(tmp->server_addr.addr.sa_family, tmp->sock_type, 0)) <
+                if ((curr_fd = (int)socket(tmp->server_addr.addr.sa_family, tmp->sock_type, tmp->sock_proto)) <
                     0) { // TODO: use SOCKET all over the way and avoid this cast
                     log_err("socket(AF_INET4/6, SOCK_x)");
                     rc = SOCKPERF_ERR_SOCKET;
@@ -3635,6 +3714,7 @@ int bringup(const int *p_daemonize) {
             tmp->mc_source_ip_addr = s_user_params.mc_source_ip_addr;
             tmp->is_multicast = is_multicast_addr(tmp->server_addr);
             tmp->sock_type = s_user_params.sock_type;
+            tmp->sock_proto = s_user_params.sock_proto;
 
             tmp->active_fd_count = 0;
             tmp->active_fd_list = (int *)MALLOC(MAX_ACTIVE_FD_NUM * sizeof(int));
@@ -3643,7 +3723,7 @@ int bringup(const int *p_daemonize) {
                 rc = SOCKPERF_ERR_NO_MEMORY;
             } else {
                 /* create a socket */
-                if ((curr_fd = (int)socket(tmp->server_addr.addr.sa_family, tmp->sock_type, 0)) <
+                if ((curr_fd = (int)socket(tmp->server_addr.addr.sa_family, tmp->sock_type, tmp->sock_proto)) <
                     0) { // TODO: use SOCKET all over the way and avoid this cast
                     log_err("socket(AF_INET4/6/AF_UNIX, SOCK_x)");
                     rc = SOCKPERF_ERR_SOCKET;

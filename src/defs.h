@@ -86,6 +86,10 @@ typedef unsigned short int sa_family_t;
 #include <netinet/tcp.h> /* tcp specific */
 #include <sys/resource.h>
 
+#ifdef __linux__
+#include <netinet/sctp.h>
+#endif
+
 #endif
 
 #include <inttypes.h> /* printf PRItn */
@@ -218,8 +222,13 @@ const uint32_t TEST_FIRST_CONNECTION_FIRST_PACKET_TTL_THRESHOLD_MSEC = 50;
         "/.+"
 #endif // defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 
-#define PRINT_PROTOCOL(type)                                                                       \
+#if defined(__linux__)
+#define PRINT_PROTOCOL(type, proto)                                                                       \
+    (proto == 0 ? ((type) == SOCK_DGRAM ? "UDP" : ((type) == SOCK_STREAM ? "TCP" : "<?>")) : proto == IPPROTO_SCTP ? "SCTP" : "<?>" )
+#else
+#define PRINT_PROTOCOL(type, proto)                                                                       \
     ((type) == SOCK_DGRAM ? "UDP" : ((type) == SOCK_STREAM ? "TCP" : "<?>"))
+#endif
 #define PRINT_SOCKET_TYPE(type)                                                                     \
     ((type) == SOCK_DGRAM ? "SOCK_DGRAM" : ((type) == SOCK_STREAM ? "SOCK_STREAM" : "<?>"))
 
@@ -291,6 +300,8 @@ enum {
     OPT_HISTOGRAM,                // 46
     OPT_LOAD_XLIO,                // 47
     OPT_TCP_NB_CONN_TIMEOUT_MS,   // 48
+    OPT_SCTP,                     // 49
+    OPT_SCTP_MAXRTO_MS,           // 50
 #if defined(DEFINED_TLS)
     OPT_TLS
 #endif /* DEFINED_TLS */
@@ -559,6 +570,7 @@ struct fds_data {
     socklen_t server_addr_len = 0;  /**< server address length */
     int is_multicast = 0;           /**< if this socket is multicast */
     int sock_type = 0;              /**< SOCK_STREAM (tcp), SOCK_DGRAM (udp), SOCK_RAW (ip) */
+    int sock_proto = 0;             /**< 0 (tcp/udp), IPPROTO_SCTP (sctp) */
     int next_fd = 0;
     int active_fd_count = 0;        /**< number of active connections (by default 1-for UDP; 0-for TCP) */
     int *active_fd_list = nullptr;  /**< list of fd related active connections (UDP has the same fd by default) */
@@ -788,8 +800,10 @@ struct user_params_t {
     struct sockaddr_store_t addr;
     socklen_t addr_len = 0;
     int sock_type = SOCK_DGRAM;
+    int sock_proto = 0;
     bool tcp_nodelay = true;
     bool is_nonblocked_send = false;
+    unsigned sctp_maxrto_ms = 0;
     int mc_ttl = 2;
     int daemonize = false;
     char feedfile_name[MAX_PATH_LENGTH];

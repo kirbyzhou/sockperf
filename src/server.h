@@ -197,7 +197,7 @@ private:
 
 void print_log(const char *error, const fds_data *fds) {
     std::string hostport = sockaddr_to_hostport(reinterpret_cast<const sockaddr *>(&fds->server_addr));
-    printf("ADDR = %s # %s ", hostport.c_str(), PRINT_PROTOCOL(fds->sock_type));
+    printf("ADDR = %s # %s ", hostport.c_str(), PRINT_PROTOCOL(fds->sock_type, fds->sock_proto));
     log_err("%s", error);
 }
 
